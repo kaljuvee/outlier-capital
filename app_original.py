@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Outlier Capital - Stock Selection & Backtesting Platform
-Updated Streamlit Application with Sector-Based Analysis
+Streamlit Application
 """
 
 import streamlit as st
@@ -17,7 +17,6 @@ import time
 from data_collection_fixed import DataCollector
 from stock_analysis import FeatureEngineer, OutlierDetector, SimilarityAnalyzer, PredictiveModeler
 from performance_engine import PerformanceCalculator, BacktestEngine
-from sector_data import get_sector_stocks, get_all_sectors, get_stocks_by_sector, get_sector_etf
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +37,6 @@ if 'feature_matrix' not in st.session_state:
     st.session_state.feature_matrix = None
 if 'predictive_modeler' not in st.session_state:
     st.session_state.predictive_modeler = PredictiveModeler()
-if 'sector_analysis_results' not in st.session_state:
-    st.session_state.sector_analysis_results = {}
 
 # Initialize components
 @st.cache_resource
@@ -77,60 +74,6 @@ def format_currency(value):
         return "N/A"
     return f"${value:,.0f}"
 
-def get_top_performers_by_return(tickers, lookback_days, top_n=10, data_source="YFinance"):
-    """Get top performing stocks by return over lookback period"""
-    try:
-        end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_days)
-        
-        performance_data = []
-        
-        for ticker in tickers:
-            try:
-                if data_source == "YFinance":
-                    price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
-                else:
-                    price_data = collector.polygon_adapter.get_price_data(ticker, start_date, end_date)
-                
-                if price_data and len(price_data) > 1:
-                    prices = [p.close_price for p in price_data]
-                    if len(prices) >= 2:
-                        total_return = (prices[-1] - prices[0]) / prices[0]
-                        
-                        # Calculate additional metrics
-                        price_series = pd.Series(prices)
-                        returns = price_series.pct_change().dropna()
-                        
-                        volatility = returns.std() * np.sqrt(252) if len(returns) > 1 else 0
-                        sharpe_ratio = (returns.mean() * 252) / volatility if volatility > 0 else 0
-                        
-                        # Calculate max drawdown
-                        cumulative = (1 + returns).cumprod()
-                        running_max = cumulative.expanding().max()
-                        drawdown = (cumulative - running_max) / running_max
-                        max_drawdown = drawdown.min()
-                        
-                        performance_data.append({
-                            'ticker': ticker,
-                            'total_return': total_return,
-                            'volatility': volatility,
-                            'sharpe_ratio': sharpe_ratio,
-                            'max_drawdown': max_drawdown,
-                            'start_price': prices[0],
-                            'end_price': prices[-1]
-                        })
-            except Exception as e:
-                logger.warning(f"Error processing {ticker}: {e}")
-                continue
-        
-        # Sort by total return and return top N
-        performance_data.sort(key=lambda x: x['total_return'], reverse=True)
-        return performance_data[:top_n]
-        
-    except Exception as e:
-        logger.error(f"Error in get_top_performers_by_return: {e}")
-        return []
-
 # Main application
 def main():
     # Header
@@ -138,246 +81,24 @@ def main():
     st.markdown("### AI-Powered Stock Selection & Backtesting Platform")
     st.markdown("---")
     
-    # Sidebar configuration
-    st.sidebar.title("⚙️ Configuration")
-    
-    # Data source selection
-    st.sidebar.subheader("📊 Data Source")
-    data_source = st.sidebar.selectbox(
-        "Choose data source:",
-        ["YFinance", "Polygon"],
-        help="Select the data provider for stock information"
-    )
-    
-    # Global settings
-    st.sidebar.subheader("🔧 Global Settings")
-    lookback_days = st.sidebar.slider(
-        "Lookback Period (days):",
-        min_value=30,
-        max_value=1825,
-        value=365,
-        help="Number of days to look back for analysis"
-    )
-    
-    top_n_performers = st.sidebar.slider(
-        "Top N Performers:",
-        min_value=5,
-        max_value=50,
-        value=15,
-        help="Number of top performers to identify"
-    )
-    
-    # Navigation
-    st.sidebar.title("🧭 Navigation")
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
     page = st.sidebar.selectbox(
         "Choose a page:",
-        ["🏆 Sector Analysis", "🔍 Stock Analysis", "👥 Similar Stocks", "📊 Performance Analysis", "⏮️ Backtesting"]
+        ["🔍 Stock Analysis", "👥 Similar Stocks", "📊 Performance Analysis", "⏮️ Backtesting"]
     )
     
     # Page routing
-    if page == "🏆 Sector Analysis":
-        sector_analysis_page(data_source, lookback_days, top_n_performers)
-    elif page == "🔍 Stock Analysis":
-        stock_analysis_page(data_source, lookback_days, top_n_performers)
+    if page == "🔍 Stock Analysis":
+        stock_analysis_page()
     elif page == "👥 Similar Stocks":
-        similar_stocks_page(data_source, lookback_days)
+        similar_stocks_page()
     elif page == "📊 Performance Analysis":
-        performance_analysis_page(data_source, lookback_days)
+        performance_analysis_page()
     elif page == "⏮️ Backtesting":
-        backtesting_page(data_source, lookback_days)
+        backtesting_page()
 
-def sector_analysis_page(data_source, lookback_days, top_n_performers):
-    """Sector-based Analysis Page"""
-    st.header("🏆 Sector-Based Top Performers")
-    
-    # Sector selection
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📋 Sector Selection")
-        
-        available_sectors = get_all_sectors()
-        selected_sectors = st.multiselect(
-            "Select sectors to analyze:",
-            available_sectors,
-            default=["Technology", "Healthcare", "Financial Services"],
-            help="Choose one or more sectors for analysis"
-        )
-        
-        analyze_by_sector = st.checkbox(
-            "Analyze each sector separately",
-            value=True,
-            help="Show top performers within each sector individually"
-        )
-    
-    with col2:
-        st.subheader("🎯 Analysis Options")
-        
-        if st.button("🚀 Run Sector Analysis", type="primary", use_container_width=True):
-            run_sector_analysis(selected_sectors, lookback_days, top_n_performers, data_source, analyze_by_sector)
-        
-        if selected_sectors:
-            total_stocks = sum(len(get_stocks_by_sector(sector)) for sector in selected_sectors)
-            st.info(f"📊 Total stocks to analyze: {total_stocks}")
-            st.info(f"📅 Analysis period: {lookback_days} days")
-            st.info(f"🎯 Data source: {data_source}")
-    
-    # Display results
-    if st.session_state.sector_analysis_results:
-        display_sector_analysis_results(analyze_by_sector)
-
-def run_sector_analysis(selected_sectors, lookback_days, top_n_performers, data_source, analyze_by_sector):
-    """Run sector-based analysis"""
-    try:
-        if not selected_sectors:
-            st.error("Please select at least one sector")
-            return
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        results = {}
-        
-        if analyze_by_sector:
-            # Analyze each sector separately
-            for i, sector in enumerate(selected_sectors):
-                status_text.text(f"Analyzing {sector} sector...")
-                progress = (i / len(selected_sectors)) * 100
-                progress_bar.progress(int(progress))
-                
-                sector_stocks = get_stocks_by_sector(sector)
-                top_performers = get_top_performers_by_return(
-                    sector_stocks, lookback_days, top_n_performers, data_source
-                )
-                
-                results[sector] = {
-                    'top_performers': top_performers,
-                    'total_stocks': len(sector_stocks),
-                    'sector_etf': get_sector_etf(sector)
-                }
-        else:
-            # Analyze all sectors together
-            status_text.text("Analyzing all selected sectors...")
-            progress_bar.progress(50)
-            
-            all_stocks = get_sector_stocks(selected_sectors)
-            top_performers = get_top_performers_by_return(
-                all_stocks, lookback_days, top_n_performers, data_source
-            )
-            
-            results['All Sectors'] = {
-                'top_performers': top_performers,
-                'total_stocks': len(all_stocks),
-                'sector_etf': 'SPY'
-            }
-        
-        st.session_state.sector_analysis_results = results
-        
-        progress_bar.progress(100)
-        status_text.text("Analysis completed!")
-        time.sleep(1)
-        progress_bar.empty()
-        status_text.empty()
-        
-        st.rerun()
-        
-    except Exception as e:
-        st.error(f"Sector analysis failed: {e}")
-        logger.error(f"Sector analysis error: {e}")
-
-def display_sector_analysis_results(analyze_by_sector):
-    """Display sector analysis results"""
-    results = st.session_state.sector_analysis_results
-    
-    st.markdown("---")
-    st.header("📊 Sector Analysis Results")
-    
-    for sector_name, sector_data in results.items():
-        st.subheader(f"🏆 {sector_name}")
-        
-        top_performers = sector_data['top_performers']
-        
-        if top_performers:
-            # Create performance table
-            performance_data = []
-            for i, stock in enumerate(top_performers, 1):
-                performance_data.append({
-                    'Rank': i,
-                    'Ticker': stock['ticker'],
-                    'Total Return': format_percentage(stock['total_return']),
-                    'Volatility': format_percentage(stock['volatility']),
-                    'Sharpe Ratio': format_number(stock['sharpe_ratio']),
-                    'Max Drawdown': format_percentage(stock['max_drawdown']),
-                    'Start Price': f"${stock['start_price']:.2f}",
-                    'End Price': f"${stock['end_price']:.2f}"
-                })
-            
-            df_performance = pd.DataFrame(performance_data)
-            st.dataframe(df_performance, use_container_width=True)
-            
-            # Performance visualization
-            tickers = [stock['ticker'] for stock in top_performers[:10]]
-            returns = [stock['total_return'] * 100 for stock in top_performers[:10]]
-            
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=tickers,
-                y=returns,
-                marker=dict(
-                    color=returns,
-                    colorscale='RdYlGn',
-                    showscale=True,
-                    colorbar=dict(title="Return %")
-                ),
-                text=[f"{r:.1f}%" for r in returns],
-                textposition='auto'
-            ))
-            
-            fig.update_layout(
-                title=f"Top 10 Performers in {sector_name}",
-                xaxis_title="Stock Ticker",
-                yaxis_title="Total Return (%)",
-                height=400
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Risk-Return scatter plot
-            if len(top_performers) > 1:
-                fig_scatter = go.Figure()
-                
-                returns_data = [stock['total_return'] * 100 for stock in top_performers]
-                volatility_data = [stock['volatility'] * 100 for stock in top_performers]
-                tickers_data = [stock['ticker'] for stock in top_performers]
-                
-                fig_scatter.add_trace(go.Scatter(
-                    x=volatility_data,
-                    y=returns_data,
-                    mode='markers+text',
-                    text=tickers_data,
-                    textposition="top center",
-                    marker=dict(
-                        size=10,
-                        color=returns_data,
-                        colorscale='RdYlGn',
-                        showscale=True,
-                        colorbar=dict(title="Return %")
-                    ),
-                    name="Stocks"
-                ))
-                
-                fig_scatter.update_layout(
-                    title=f"Risk vs Return - {sector_name}",
-                    xaxis_title="Volatility (%)",
-                    yaxis_title="Total Return (%)",
-                    height=500
-                )
-                
-                st.plotly_chart(fig_scatter, use_container_width=True)
-        else:
-            st.warning(f"No performance data available for {sector_name}")
-
-def stock_analysis_page(data_source, lookback_days, top_n_performers):
+def stock_analysis_page():
     """Stock Analysis and Outlier Detection Page"""
     st.header("🔍 Stock Analysis & Outlier Detection")
     
@@ -385,45 +106,38 @@ def stock_analysis_page(data_source, lookback_days, top_n_performers):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📋 Stock Selection")
+        st.subheader("Configuration")
         
-        # Sector-based selection
-        available_sectors = get_all_sectors()
-        selected_sectors = st.multiselect(
-            "Select sectors for analysis:",
-            available_sectors,
-            default=["Technology", "Healthcare"],
-            help="Choose sectors to include in the analysis"
+        # Default tickers
+        default_tickers = "AAPL, GOOGL, MSFT, TSLA, AMZN, META, NVDA, NFLX, CRM, ADBE"
+        tickers_input = st.text_area(
+            "Stock Tickers (comma-separated):",
+            value=default_tickers,
+            height=100,
+            help="Enter stock ticker symbols separated by commas"
         )
         
-        if selected_sectors:
-            all_stocks = get_sector_stocks(selected_sectors)
-            st.info(f"📊 Total stocks from selected sectors: {len(all_stocks)}")
+        lookback_days = st.slider(
+            "Lookback Period (days):",
+            min_value=30,
+            max_value=1825,
+            value=365,
+            help="Number of days to look back for analysis"
+        )
         
-        # Option to add custom tickers
-        custom_tickers = st.text_input(
-            "Additional tickers (optional):",
-            placeholder="AAPL, GOOGL, MSFT",
-            help="Add specific tickers not covered by sector selection"
+        top_n = st.slider(
+            "Top N Outliers:",
+            min_value=1,
+            max_value=50,
+            value=10,
+            help="Number of top outlier stocks to identify"
         )
     
     with col2:
-        st.subheader("🎯 Analysis Configuration")
+        st.subheader("Analysis")
         
         if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
-            tickers_to_analyze = []
-            
-            if selected_sectors:
-                tickers_to_analyze.extend(get_sector_stocks(selected_sectors))
-            
-            if custom_tickers:
-                custom_list = [t.strip().upper() for t in custom_tickers.split(',') if t.strip()]
-                tickers_to_analyze.extend(custom_list)
-            
-            if tickers_to_analyze:
-                run_stock_analysis(list(set(tickers_to_analyze)), lookback_days, top_n_performers, data_source)
-            else:
-                st.error("Please select sectors or enter custom tickers")
+            run_stock_analysis(tickers_input, lookback_days, top_n)
         
         # Display analysis info
         if st.session_state.analysis_results:
@@ -436,11 +150,14 @@ def stock_analysis_page(data_source, lookback_days, top_n_performers):
     if st.session_state.analysis_results:
         display_analysis_results()
 
-def run_stock_analysis(tickers, lookback_days, top_n, data_source):
+def run_stock_analysis(tickers_input, lookback_days, top_n):
     """Run the stock analysis"""
     try:
+        # Parse tickers
+        tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+        
         if not tickers:
-            st.error("No tickers to analyze")
+            st.error("Please enter at least one ticker symbol")
             return
         
         # Show progress
@@ -458,14 +175,9 @@ def run_stock_analysis(tickers, lookback_days, top_n, data_source):
         stocks_data = {}
         for i, ticker in enumerate(tickers):
             try:
-                if data_source == "YFinance":
-                    stock_info = collector.yfinance_adapter.get_stock_info(ticker)
-                    price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
-                    fundamental_data = collector.yfinance_adapter.get_fundamental_data(ticker)
-                else:
-                    stock_info = collector.polygon_adapter.get_stock_info(ticker)
-                    price_data = collector.polygon_adapter.get_price_data(ticker, start_date, end_date)
-                    fundamental_data = collector.polygon_adapter.get_fundamental_data(ticker)
+                stock_info = collector.yfinance_adapter.get_stock_info(ticker)
+                price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
+                fundamental_data = collector.yfinance_adapter.get_fundamental_data(ticker)
                 
                 stocks_data[ticker] = {
                     'stock_info': stock_info,
@@ -520,8 +232,7 @@ def run_stock_analysis(tickers, lookback_days, top_n, data_source):
             'total_stocks_analyzed': len(stocks_data),
             'outliers': outliers,
             'model_metrics': model_metrics,
-            'feature_importance': feature_importance,
-            'data_source': data_source
+            'feature_importance': feature_importance
         }
         
         progress_bar.progress(100)
@@ -652,7 +363,7 @@ def display_analysis_results():
         
         st.plotly_chart(fig_importance, use_container_width=True)
 
-def similar_stocks_page(data_source, lookback_days):
+def similar_stocks_page():
     """Similar Stocks Analysis Page"""
     st.header("👥 Find Similar Stocks")
     
@@ -673,30 +384,32 @@ def similar_stocks_page(data_source, lookback_days):
         )
     
     with col2:
-        # Sector-based comparison universe
-        available_sectors = get_all_sectors()
-        comparison_sectors = st.multiselect(
-            "Comparison Universe (sectors):",
-            available_sectors,
-            default=["Technology", "Healthcare"],
-            help="Select sectors to search for similar stocks"
+        lookback_days = st.slider(
+            "Lookback Period (days):",
+            min_value=30,
+            max_value=1825,
+            value=365
+        )
+        
+        comparison_tickers = st.text_area(
+            "Comparison Universe (comma-separated):",
+            value="GOOGL, MSFT, AMZN, TSLA, META, NVDA, NFLX, CRM, ADBE, ORCL",
+            help="Stocks to compare against"
         )
     
     if st.button("🔍 Find Similar Stocks", type="primary", use_container_width=True):
-        if comparison_sectors:
-            comparison_tickers = get_sector_stocks(comparison_sectors)
-            find_similar_stocks(target_ticker, n_similar, lookback_days, comparison_tickers, data_source)
-        else:
-            st.error("Please select at least one sector for comparison")
+        find_similar_stocks(target_ticker, n_similar, lookback_days, comparison_tickers)
 
-def find_similar_stocks(target_ticker, n_similar, lookback_days, comparison_tickers, data_source):
+def find_similar_stocks(target_ticker, n_similar, lookback_days, comparison_tickers):
     """Find similar stocks"""
     try:
         if not target_ticker:
             st.error("Please enter a target ticker")
             return
         
-        all_tickers = list(set([target_ticker] + comparison_tickers))
+        # Parse comparison tickers
+        comparison_list = [t.strip().upper() for t in comparison_tickers.split(',') if t.strip()]
+        all_tickers = list(set([target_ticker] + comparison_list))
         
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -712,14 +425,9 @@ def find_similar_stocks(target_ticker, n_similar, lookback_days, comparison_tick
         stocks_data = {}
         for i, ticker in enumerate(all_tickers):
             try:
-                if data_source == "YFinance":
-                    stock_info = collector.yfinance_adapter.get_stock_info(ticker)
-                    price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
-                    fundamental_data = collector.yfinance_adapter.get_fundamental_data(ticker)
-                else:
-                    stock_info = collector.polygon_adapter.get_stock_info(ticker)
-                    price_data = collector.polygon_adapter.get_price_data(ticker, start_date, end_date)
-                    fundamental_data = collector.polygon_adapter.get_fundamental_data(ticker)
+                stock_info = collector.yfinance_adapter.get_stock_info(ticker)
+                price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
+                fundamental_data = collector.yfinance_adapter.get_fundamental_data(ticker)
                 
                 stocks_data[ticker] = {
                     'stock_info': stock_info,
@@ -793,7 +501,7 @@ def find_similar_stocks(target_ticker, n_similar, lookback_days, comparison_tick
     except Exception as e:
         st.error(f"Similarity analysis failed: {e}")
 
-def performance_analysis_page(data_source, lookback_days):
+def performance_analysis_page():
     """Performance Analysis Page"""
     st.header("📊 Performance Analysis")
     
@@ -807,13 +515,17 @@ def performance_analysis_page(data_source, lookback_days):
         ).upper()
     
     with col2:
-        st.info(f"📊 Data Source: {data_source}")
-        st.info(f"📅 Lookback Period: {lookback_days} days")
+        lookback_days = st.slider(
+            "Lookback Period (days):",
+            min_value=30,
+            max_value=1825,
+            value=365
+        )
     
     if st.button("📈 Analyze Performance", type="primary", use_container_width=True):
-        analyze_performance(ticker, lookback_days, data_source)
+        analyze_performance(ticker, lookback_days)
 
-def analyze_performance(ticker, lookback_days, data_source):
+def analyze_performance(ticker, lookback_days):
     """Analyze stock performance"""
     try:
         if not ticker:
@@ -831,10 +543,7 @@ def analyze_performance(ticker, lookback_days, data_source):
         progress_bar.progress(30)
         
         # Collect price data
-        if data_source == "YFinance":
-            price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
-        else:
-            price_data = collector.polygon_adapter.get_price_data(ticker, start_date, end_date)
+        price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
         
         if not price_data:
             st.error(f"No price data found for {ticker}")
@@ -968,7 +677,7 @@ def display_performance_results(ticker, metrics, price_data):
         )
         st.plotly_chart(fig_cumret, use_container_width=True)
 
-def backtesting_page(data_source, lookback_days):
+def backtesting_page():
     """Backtesting Page"""
     st.header("⏮️ Strategy Backtesting")
     
@@ -979,20 +688,10 @@ def backtesting_page(data_source, lookback_days):
         
         strategy_name = st.text_input("Strategy Name:", value="My Strategy")
         
-        # Sector-based stock selection
-        available_sectors = get_all_sectors()
-        selected_sectors = st.multiselect(
-            "Select sectors for strategy:",
-            available_sectors,
-            default=["Technology"],
-            help="Choose sectors to include in the strategy"
-        )
-        
-        # Option to add custom tickers
-        custom_tickers = st.text_input(
-            "Additional tickers (optional):",
-            placeholder="AAPL, GOOGL, MSFT",
-            help="Add specific tickers not covered by sector selection"
+        tickers_input = st.text_area(
+            "Stock Tickers (comma-separated):",
+            value="AAPL, GOOGL, MSFT",
+            height=100
         )
         
         initial_capital = st.number_input(
@@ -1017,32 +716,26 @@ def backtesting_page(data_source, lookback_days):
             index=0
         )
         
-        st.info(f"📊 Data Source: {data_source}")
-        st.info(f"📅 Lookback Period: {lookback_days} days")
+        lookback_days = st.slider(
+            "Lookback Period (days):",
+            min_value=30,
+            max_value=1825,
+            value=365
+        )
     
     if st.button("🚀 Run Backtest", type="primary", use_container_width=True):
-        # Prepare tickers list
-        tickers_to_backtest = []
-        
-        if selected_sectors:
-            tickers_to_backtest.extend(get_sector_stocks(selected_sectors))
-        
-        if custom_tickers:
-            custom_list = [t.strip().upper() for t in custom_tickers.split(',') if t.strip()]
-            tickers_to_backtest.extend(custom_list)
-        
-        if tickers_to_backtest:
-            run_backtest_analysis(strategy_name, list(set(tickers_to_backtest)), initial_capital, 
-                                rebalance_frequency, position_sizing, lookback_days, data_source)
-        else:
-            st.error("Please select sectors or enter custom tickers")
+        run_backtest_analysis(strategy_name, tickers_input, initial_capital, 
+                            rebalance_frequency, position_sizing, lookback_days)
 
-def run_backtest_analysis(strategy_name, tickers, initial_capital, 
-                         rebalance_frequency, position_sizing, lookback_days, data_source):
+def run_backtest_analysis(strategy_name, tickers_input, initial_capital, 
+                         rebalance_frequency, position_sizing, lookback_days):
     """Run backtesting analysis"""
     try:
+        # Parse tickers
+        tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+        
         if not tickers:
-            st.error("No tickers to backtest")
+            st.error("Please enter at least one ticker symbol")
             return
         
         progress_bar = st.progress(0)
@@ -1061,36 +754,17 @@ def run_backtest_analysis(strategy_name, tickers, initial_capital,
             'tickers': tickers,
             'rebalance_frequency': rebalance_frequency,
             'position_sizing': position_sizing,
-            'transaction_cost': 0.001,
-            'data_source': data_source
+            'transaction_cost': 0.001
         }
         
-        status_text.text("Collecting price data for backtest...")
-        progress_bar.progress(40)
-        
-        # Collect price data for all tickers
-        price_data_dict = {}
-        for ticker in tickers:
-            try:
-                if data_source == "YFinance":
-                    price_data = collector.yfinance_adapter.get_price_data(ticker, start_date, end_date)
-                else:
-                    price_data = collector.polygon_adapter.get_price_data(ticker, start_date, end_date)
-                
-                if price_data:
-                    price_data_dict[ticker] = price_data
-            except Exception as e:
-                logger.warning(f"Could not get price data for {ticker}: {e}")
-        
-        if not price_data_dict:
-            st.error("No price data available for backtesting")
-            return
-        
         status_text.text("Running backtest simulation...")
-        progress_bar.progress(70)
+        progress_bar.progress(50)
         
-        # Create a simple backtest result
-        result = run_simple_backtest(price_data_dict, initial_capital, strategy_config, start_date, end_date)
+        # Initialize backtest engine
+        custom_engine = BacktestEngine(initial_capital=initial_capital)
+        
+        # Run backtest
+        result = custom_engine.run_backtest(strategy_config, start_date, end_date)
         
         progress_bar.progress(100)
         status_text.text("Backtest completed!")
@@ -1103,94 +777,6 @@ def run_backtest_analysis(strategy_name, tickers, initial_capital,
         
     except Exception as e:
         st.error(f"Backtest failed: {e}")
-        logger.error(f"Backtest error: {e}")
-
-def run_simple_backtest(price_data_dict, initial_capital, strategy_config, start_date, end_date):
-    """Run a simplified backtest"""
-    try:
-        # Convert price data to DataFrame
-        all_prices = {}
-        for ticker, price_data in price_data_dict.items():
-            prices = pd.Series([p.close_price for p in price_data],
-                             index=[p.date for p in price_data])
-            all_prices[ticker] = prices.sort_index()
-        
-        price_df = pd.DataFrame(all_prices)
-        price_df = price_df.dropna()
-        
-        if price_df.empty:
-            raise ValueError("No overlapping price data for backtesting")
-        
-        # Calculate returns
-        returns_df = price_df.pct_change().dropna()
-        
-        # Equal weight portfolio
-        n_stocks = len(price_df.columns)
-        weights = np.ones(n_stocks) / n_stocks
-        
-        # Calculate portfolio returns
-        portfolio_returns = (returns_df * weights).sum(axis=1)
-        
-        # Calculate portfolio value over time
-        portfolio_values = initial_capital * (1 + portfolio_returns).cumprod()
-        
-        # Calculate metrics
-        total_return = (portfolio_values.iloc[-1] - initial_capital) / initial_capital
-        annualized_return = (1 + total_return) ** (252 / len(portfolio_returns)) - 1
-        volatility = portfolio_returns.std() * np.sqrt(252)
-        
-        # Calculate drawdown
-        running_max = portfolio_values.expanding().max()
-        drawdown = (portfolio_values - running_max) / running_max
-        max_drawdown = drawdown.min()
-        
-        # Calculate Sharpe ratio (assuming 0% risk-free rate)
-        sharpe_ratio = annualized_return / volatility if volatility > 0 else 0
-        
-        # Calculate Sortino ratio
-        negative_returns = portfolio_returns[portfolio_returns < 0]
-        downside_deviation = negative_returns.std() * np.sqrt(252) if len(negative_returns) > 0 else 0
-        sortino_ratio = annualized_return / downside_deviation if downside_deviation > 0 else 0
-        
-        # Calculate VaR and CVaR
-        var_95 = np.percentile(portfolio_returns, 5)
-        cvar_95 = portfolio_returns[portfolio_returns <= var_95].mean()
-        
-        # Win rate
-        positive_returns = portfolio_returns[portfolio_returns > 0]
-        win_rate = len(positive_returns) / len(portfolio_returns)
-        
-        # Create result object
-        class BacktestResult:
-            def __init__(self):
-                self.strategy_name = strategy_config['name']
-                self.start_date = start_date
-                self.end_date = end_date
-                self.initial_capital = initial_capital
-                self.final_capital = portfolio_values.iloc[-1]
-                self.total_return = total_return
-                self.annualized_return = annualized_return
-                self.volatility = volatility
-                self.max_drawdown = max_drawdown
-                self.sharpe_ratio = sharpe_ratio
-                self.sortino_ratio = sortino_ratio
-                self.information_ratio = 0  # Simplified
-                self.var_95 = var_95
-                self.cvar_95 = cvar_95
-                self.beta = 1.0  # Simplified
-                self.alpha = annualized_return  # Simplified
-                self.tracking_error = volatility  # Simplified
-                self.win_rate = win_rate
-                self.profit_factor = 1.0  # Simplified
-                self.max_consecutive_losses = 0  # Simplified
-                self.portfolio_values = portfolio_values
-                self.trades = []  # Simplified
-        
-        return BacktestResult()
-        
-    except Exception as e:
-        logger.error(f"Error in run_simple_backtest: {e}")
-        raise
 
 def display_backtest_results(result):
     """Display backtest results"""
